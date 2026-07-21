@@ -6,6 +6,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.util.List;
 import org.bukkit.Material;
 import org.bukkit.block.Campfire;
 import org.bukkit.inventory.ItemStack;
@@ -40,5 +41,24 @@ class CampfireContentsTest {
         assertEquals(copy, result);
         verify(copy).setAmount(1);
         verify(source, never()).setAmount(1);
+    }
+
+    @Test
+    void snapshotRestoresTheCookingDisabledFlag() {
+        ItemStack item = mock(ItemStack.class);
+        ItemStack restoredItem = mock(ItemStack.class);
+        when(item.clone()).thenReturn(restoredItem);
+        Campfire target = mock(Campfire.class);
+        when(target.getSize()).thenReturn(4);
+        CampfireContents.Snapshot snapshot = new CampfireContents.Snapshot(List.of(
+                new CampfireContents.Slot(item, 12, 80, true)));
+
+        snapshot.applyTo(target);
+
+        verify(target).setItem(0, restoredItem);
+        verify(target).setCookTime(0, 12);
+        verify(target).setCookTimeTotal(0, 80);
+        verify(target).stopCooking(0);
+        verify(target, never()).startCooking(0);
     }
 }

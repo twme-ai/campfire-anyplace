@@ -2,12 +2,18 @@ package dev.campfireanyplace;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.OptionalInt;
 import java.util.UUID;
 import org.bukkit.GameMode;
+import org.bukkit.Location;
+import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.block.BlockState;
 import org.bukkit.block.Campfire;
+import org.bukkit.block.data.BlockData;
+import org.bukkit.entity.Player;
+import org.bukkit.event.Event;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -69,30 +75,49 @@ final class CampfireListener implements Listener {
             return;
         }
 
+        BlockData originalBlockData = campfire.getBlockData().clone();
+        event.setUseInteractedBlock(Event.Result.DENY);
+        event.setUseItemInHand(Event.Result.DENY);
+        event.setCancelled(true);
+
         campfire.setItem(slot, CampfireContents.oneItem(held));
         campfire.setCookTime(slot, 0);
-        campfire.setCookTimeTotal(slot, cookingTimeFor(held));
-        if (!campfire.update(true, false)) {
+        OptionalInt cookingTime = cookingTimeFor(held);
+        if (cookingTime.isPresent()) {
+            campfire.setCookTimeTotal(slot, cookingTime.getAsInt());
+            campfire.startCooking(slot);
+        } else {
+            // Paper ejects a non-recipe item when its cooking timer completes.
+            campfire.setCookTimeTotal(slot, Integer.MAX_VALUE);
+            campfire.stopCooking(slot);
+        }
+        campfire.setBlockData(originalBlockData);
+        if (!campfire.update(false, false)) {
             return;
         }
 
-        if (event.getPlayer().getGameMode() != GameMode.CREATIVE) {
+        Player player = event.getPlayer();
+        if (player.getGameMode() != GameMode.CREATIVE) {
             held.subtract(1);
         }
-        event.setCancelled(true);
+        sendCampfireUpdate(player, clicked);
+        plugin.getServer().getScheduler().runTask(plugin, () -> {
+            restoreBlockData(clicked, originalBlockData);
+            broadcastCampfireUpdate(clicked);
+            player.updateInventory();
+        });
     }
 
-    private int cookingTimeFor(ItemStack item) {
+    private OptionalInt cookingTimeFor(ItemStack item) {
         var recipes = plugin.getServer().recipeIterator();
         while (recipes.hasNext()) {
             Recipe recipe = recipes.next();
             if (recipe instanceof CampfireRecipe campfireRecipe
                     && campfireRecipe.getInputChoice().test(item)) {
-                return campfireRecipe.getCookingTime();
+                return OptionalInt.of(campfireRecipe.getCookingTime());
             }
         }
-        // A positive total keeps non-recipe items in a stable block-entity state.
-        return 600;
+        return OptionalInt.empty();
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -107,7 +132,6 @@ final class CampfireListener implements Listener {
 
         Block placed = event.getBlockPlaced();
         CampfireContents.Snapshot restoreContents = contents;
-        restore(placed, restoreContents);
         plugin.getServer().getScheduler().runTask(plugin, () -> restore(placed, restoreContents));
     }
 
@@ -122,11 +146,46 @@ final class CampfireListener implements Listener {
         return CampfireContents.capture(campfire);
     }
 
-    private static void restore(Block block, CampfireContents.Snapshot contents) {
+    private void restore(Block block, CampfireContents.Snapshot contents) {
         if (!(block.getState() instanceof Campfire campfire)) {
             return;
         }
         contents.applyTo(campfire);
-        campfire.update(true, false);
+        stabilizeNonRecipeItems(campfire);
+        if (campfire.update(false, false)) {
+            broadcastCampfireUpdate(block);
+        }
+    }
+
+    private void stabilizeNonRecipeItems(Campfire campfire) {
+        for (int slot = 0; slot < campfire.getSize(); slot++) {
+            ItemStack item = campfire.getItem(slot);
+            if (item != null && cookingTimeFor(item).isEmpty()) {
+                campfire.setCookTimeTotal(slot, Integer.MAX_VALUE);
+                campfire.stopCooking(slot);
+            }
+        }
+    }
+
+    private static void restoreBlockData(Block block, BlockData originalBlockData) {
+        if (block.getType() == originalBlockData.getMaterial()
+                && !block.getBlockData().equals(originalBlockData)) {
+            block.setBlockData(originalBlockData, false);
+        }
+    }
+
+    private static void broadcastCampfireUpdate(Block block) {
+        World world = block.getWorld();
+        for (Player player : world.getPlayers()) {
+            sendCampfireUpdate(player, block);
+        }
+    }
+
+    private static void sendCampfireUpdate(Player player, Block block) {
+        if (block.getState() instanceof Campfire campfire) {
+            Location location = block.getLocation();
+            player.sendBlockChange(location, campfire.getBlockData());
+            player.sendBlockUpdate(location, campfire);
+        }
     }
 }

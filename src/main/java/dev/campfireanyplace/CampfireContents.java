@@ -32,12 +32,13 @@ final class CampfireContents {
             slots.add(new Slot(
                     item == null ? null : item.clone(),
                     campfire.getCookTime(i),
-                    campfire.getCookTimeTotal(i)));
+                    campfire.getCookTimeTotal(i),
+                    campfire.isCookingDisabled(i)));
         }
         return new Snapshot(List.copyOf(slots));
     }
 
-    record Slot(ItemStack item, int cookTime, int cookTimeTotal) {
+    record Slot(ItemStack item, int cookTime, int cookTimeTotal, boolean cookingDisabled) {
     }
 
     record Snapshot(List<Slot> slots) {
@@ -48,6 +49,11 @@ final class CampfireContents {
                 campfire.setItem(i, slot.item() == null ? null : slot.item().clone());
                 campfire.setCookTime(i, slot.cookTime());
                 campfire.setCookTimeTotal(i, slot.cookTimeTotal());
+                if (slot.cookingDisabled()) {
+                    campfire.stopCooking(i);
+                } else {
+                    campfire.startCooking(i);
+                }
             }
         }
     }
