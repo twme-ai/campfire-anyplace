@@ -2,6 +2,7 @@ package dev.campfireanyplace;
 
 import java.util.ArrayList;
 import java.util.List;
+import org.bukkit.Material;
 import org.bukkit.block.Campfire;
 import org.bukkit.inventory.ItemStack;
 
@@ -12,11 +13,19 @@ final class CampfireContents {
     static int firstEmptySlot(Campfire campfire) {
         for (int slot = 0; slot < campfire.getSize(); slot++) {
             ItemStack item = campfire.getItem(slot);
-            if (item == null || item.getType().isAir()) {
+            if (isEmpty(item)) {
                 return slot;
             }
         }
         return -1;
+    }
+
+    static boolean isEmpty(ItemStack item) {
+        Material type = item == null ? null : item.getType();
+        if (type == null) {
+            return true;
+        }
+        return type == Material.AIR || type == Material.CAVE_AIR || type == Material.VOID_AIR;
     }
 
     static ItemStack oneItem(ItemStack source) {

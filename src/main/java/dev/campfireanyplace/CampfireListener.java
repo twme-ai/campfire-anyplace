@@ -4,6 +4,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.OptionalInt;
 import java.util.UUID;
+import org.bukkit.Chunk;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.World;
@@ -20,6 +21,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.CampfireRecipe;
 import org.bukkit.inventory.ItemStack;
@@ -37,7 +39,7 @@ final class CampfireListener implements Listener {
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
     public void rememberCampfireBeforePlacement(PlayerInteractEvent event) {
-        if (event.getAction() != Action.RIGHT_CLICK_BLOCK || event.getHand() != EquipmentSlot.HAND) {
+        if (event.getAction() != Action.RIGHT_CLICK_BLOCK || !shouldHandleHand(event)) {
             return;
         }
 
@@ -55,7 +57,7 @@ final class CampfireListener implements Listener {
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onCampfireInteract(PlayerInteractEvent event) {
         if (event.getAction() != Action.RIGHT_CLICK_BLOCK
-                || event.getHand() != EquipmentSlot.HAND
+                || !shouldHandleHand(event)
                 || event.getBlockFace() != BlockFace.UP) {
             return;
         }
@@ -66,7 +68,7 @@ final class CampfireListener implements Listener {
         }
 
         ItemStack held = event.getItem();
-        if (held == null || held.getType().isAir()) {
+        if (CampfireContents.isEmpty(held)) {
             return;
         }
 
@@ -120,6 +122,16 @@ final class CampfireListener implements Listener {
         return OptionalInt.empty();
     }
 
+    private static boolean shouldHandleHand(PlayerInteractEvent event) {
+        if (event.getHand() == EquipmentSlot.HAND) {
+            return true;
+        }
+        if (event.getHand() != EquipmentSlot.OFF_HAND) {
+            return false;
+        }
+        return CampfireContents.isEmpty(event.getPlayer().getInventory().getItemInMainHand());
+    }
+
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onCampfirePlaced(BlockPlaceEvent event) {
         CampfireContents.Snapshot contents = pendingPlacements.remove(event.getPlayer().getUniqueId());
@@ -133,6 +145,19 @@ final class CampfireListener implements Listener {
         Block placed = event.getBlockPlaced();
         CampfireContents.Snapshot restoreContents = contents;
         plugin.getServer().getScheduler().runTask(plugin, () -> restore(placed, restoreContents));
+    }
+
+    @EventHandler
+    public void onChunkLoad(ChunkLoadEvent event) {
+        stabilizeCampfires(event.getChunk());
+    }
+
+    void stabilizeLoadedCampfires() {
+        for (World world : plugin.getServer().getWorlds()) {
+            for (Chunk chunk : world.getLoadedChunks()) {
+                stabilizeCampfires(chunk);
+            }
+        }
     }
 
     private static CampfireContents.Snapshot contentsFrom(ItemStack item) {
@@ -157,14 +182,40 @@ final class CampfireListener implements Listener {
         }
     }
 
-    private void stabilizeNonRecipeItems(Campfire campfire) {
-        for (int slot = 0; slot < campfire.getSize(); slot++) {
-            ItemStack item = campfire.getItem(slot);
-            if (item != null && cookingTimeFor(item).isEmpty()) {
-                campfire.setCookTimeTotal(slot, Integer.MAX_VALUE);
-                campfire.stopCooking(slot);
+    private void stabilizeCampfires(Chunk chunk) {
+        for (BlockState state : chunk.getTileEntities()) {
+            if (state instanceof Campfire campfire && stabilizeNonRecipeItems(campfire)) {
+                if (campfire.update(false, false) && campfire.getBlock() != null) {
+                    broadcastCampfireUpdate(campfire.getBlock());
+                }
             }
         }
+    }
+
+    private boolean stabilizeNonRecipeItems(Campfire campfire) {
+        boolean changed = false;
+        for (int slot = 0; slot < campfire.getSize(); slot++) {
+            ItemStack item = campfire.getItem(slot);
+            if (CampfireContents.isEmpty(item)) {
+                continue;
+            }
+            if (campfire.getCookTimeTotal(slot) == Integer.MAX_VALUE
+                    && campfire.isCookingDisabled(slot)) {
+                continue;
+            }
+            if (cookingTimeFor(item).isPresent()) {
+                continue;
+            }
+            if (campfire.getCookTimeTotal(slot) != Integer.MAX_VALUE) {
+                campfire.setCookTimeTotal(slot, Integer.MAX_VALUE);
+                changed = true;
+            }
+            if (!campfire.isCookingDisabled(slot)) {
+                campfire.stopCooking(slot);
+                changed = true;
+            }
+        }
+        return changed;
     }
 
     private static void restoreBlockData(Block block, BlockData originalBlockData) {
@@ -175,8 +226,7 @@ final class CampfireListener implements Listener {
     }
 
     private static void broadcastCampfireUpdate(Block block) {
-        World world = block.getWorld();
-        for (Player player : world.getPlayers()) {
+        for (Player player : block.getChunk().getPlayersSeeingChunk()) {
             sendCampfireUpdate(player, block);
         }
     }
