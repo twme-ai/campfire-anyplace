@@ -17,3 +17,7 @@ mvn clean package
 ```
 
 Install `target/campfire-anyplace-1.0.0.jar` in the server's `plugins` directory.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
