@@ -114,6 +114,42 @@ final class CampfireListener implements Listener {
         });
     }
 
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onCampfireHit(PlayerInteractEvent event) {
+        if (event.getAction() != Action.LEFT_CLICK_BLOCK
+                || event.getHand() != EquipmentSlot.HAND
+                || event.getBlockFace() != BlockFace.UP) {
+            return;
+        }
+
+        Block clicked = event.getClickedBlock();
+        if (clicked == null || !(clicked.getState() instanceof Campfire campfire)) {
+            return;
+        }
+
+        int slot = CampfireContents.lastOccupiedSlot(campfire);
+        if (slot < 0) {
+            return;
+        }
+
+        ItemStack removed = campfire.getItem(slot).clone();
+        event.setUseInteractedBlock(Event.Result.DENY);
+        event.setUseItemInHand(Event.Result.DENY);
+        event.setCancelled(true);
+
+        campfire.setItem(slot, null);
+        campfire.setCookTime(slot, 0);
+        campfire.setCookTimeTotal(slot, 0);
+        campfire.stopCooking(slot);
+        if (!campfire.update(false, false)) {
+            return;
+        }
+
+        clicked.getWorld().dropItemNaturally(
+                clicked.getLocation().add(0.5, 1.0, 0.5), removed);
+        broadcastCampfireUpdate(clicked);
+    }
+
     private OptionalInt cookingTimeFor(ItemStack item) {
         var recipes = plugin.getServer().recipeIterator();
         while (recipes.hasNext()) {

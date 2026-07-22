@@ -10,6 +10,10 @@ off hand works when the main hand is empty. Non-food items stay on either
 campfire type without being cooked or ejected, and changes are sent to players
 immediately. Interacting with an unlit campfire keeps it unlit.
 
+Left-clicking a campfire's top face with the main hand removes one stored item
+instead of breaking it. Items come out from the highest occupied slot down; once
+the campfire is empty, a top-face left click breaks it normally.
+
 Placing a campfire item that contains block-state item data restores its items,
 cooking timers, and disabled cooking state instead of losing or dropping those
 contents. In creative mode, using Ctrl + pick block on an unlit campfire also
@@ -26,7 +30,7 @@ Requires Java 21 and Maven:
 mvn clean package
 ```
 
-Install `target/campfire-anyplace-1.1.2.jar` in the server's `plugins` directory.
+Install `target/campfire-anyplace-1.2.0.jar` in the server's `plugins` directory.
 
 ## License
 

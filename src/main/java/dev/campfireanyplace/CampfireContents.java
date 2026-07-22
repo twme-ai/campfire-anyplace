@@ -20,6 +20,16 @@ final class CampfireContents {
         return -1;
     }
 
+    static int lastOccupiedSlot(Campfire campfire) {
+        for (int slot = campfire.getSize() - 1; slot >= 0; slot--) {
+            ItemStack item = campfire.getItem(slot);
+            if (!isEmpty(item)) {
+                return slot;
+            }
+        }
+        return -1;
+    }
+
     static boolean isEmpty(ItemStack item) {
         Material type = item == null ? null : item.getType();
         if (type == null) {

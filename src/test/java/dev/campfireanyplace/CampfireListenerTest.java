@@ -1,8 +1,12 @@
 package dev.campfireanyplace;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -47,6 +51,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 
 class CampfireListenerTest {
     @ParameterizedTest
@@ -125,6 +130,144 @@ class CampfireListenerTest {
         verify(fixture.held, never()).subtract(1);
         verify(fixture.scheduler, never()).runTask(eq(fixture.plugin), any(Runnable.class));
         verify(fixture.player, never()).sendBlockUpdate(any(Location.class), any(Campfire.class));
+    }
+
+    @Test
+    void topHitsRemoveItemsOneAtATimeInReverseSlotOrder() {
+        Plugin plugin = mock(Plugin.class);
+        CampfireListener listener = new CampfireListener(plugin);
+        PlayerInteractEvent event = mock(PlayerInteractEvent.class);
+        Block block = mock(Block.class);
+        Campfire campfire = mock(Campfire.class);
+        World world = mock(World.class);
+        Chunk chunk = mock(Chunk.class);
+
+        when(event.getAction()).thenReturn(Action.LEFT_CLICK_BLOCK);
+        when(event.getHand()).thenReturn(EquipmentSlot.HAND);
+        when(event.getBlockFace()).thenReturn(BlockFace.UP);
+        when(event.getClickedBlock()).thenReturn(block);
+        when(block.getState()).thenReturn(campfire);
+        when(block.getWorld()).thenReturn(world);
+        when(block.getLocation()).thenAnswer(ignored -> new Location(world, 10, 64, 20));
+        when(block.getChunk()).thenReturn(chunk);
+        when(chunk.getPlayersSeeingChunk()).thenReturn(List.of());
+        when(campfire.getSize()).thenReturn(4);
+        when(campfire.update(false, false)).thenReturn(true);
+
+        ItemStack first = mock(ItemStack.class);
+        ItemStack second = mock(ItemStack.class);
+        ItemStack third = mock(ItemStack.class);
+        ItemStack firstDrop = mock(ItemStack.class);
+        ItemStack secondDrop = mock(ItemStack.class);
+        ItemStack thirdDrop = mock(ItemStack.class);
+        when(first.getType()).thenReturn(Material.STONE);
+        when(second.getType()).thenReturn(Material.PLAYER_HEAD);
+        when(third.getType()).thenReturn(Material.DIAMOND);
+        when(first.clone()).thenReturn(firstDrop);
+        when(second.clone()).thenReturn(secondDrop);
+        when(third.clone()).thenReturn(thirdDrop);
+
+        ItemStack[] slots = {first, second, third, null};
+        when(campfire.getItem(anyInt())).thenAnswer(
+                invocation -> slots[(int) invocation.getArgument(0)]);
+        doAnswer(invocation -> {
+            slots[(int) invocation.getArgument(0)] = invocation.getArgument(1);
+            return null;
+        }).when(campfire).setItem(anyInt(), nullable(ItemStack.class));
+
+        listener.onCampfireHit(event);
+        listener.onCampfireHit(event);
+        listener.onCampfireHit(event);
+        listener.onCampfireHit(event);
+
+        InOrder removalOrder = inOrder(campfire);
+        removalOrder.verify(campfire).setItem(2, null);
+        removalOrder.verify(campfire).setItem(1, null);
+        removalOrder.verify(campfire).setItem(0, null);
+        verify(event, times(3)).setCancelled(true);
+        verify(campfire, times(3)).update(false, false);
+
+        ArgumentCaptor<Location> locations = ArgumentCaptor.forClass(Location.class);
+        ArgumentCaptor<ItemStack> drops = ArgumentCaptor.forClass(ItemStack.class);
+        verify(world, times(3)).dropItemNaturally(locations.capture(), drops.capture());
+        assertEquals(List.of(thirdDrop, secondDrop, firstDrop), drops.getAllValues());
+        for (Location location : locations.getAllValues()) {
+            assertEquals(10.5, location.getX());
+            assertEquals(65.0, location.getY());
+            assertEquals(20.5, location.getZ());
+        }
+    }
+
+    @Test
+    void emptyCampfireCanBeBrokenNormallyFromAbove() {
+        Plugin plugin = mock(Plugin.class);
+        CampfireListener listener = new CampfireListener(plugin);
+        PlayerInteractEvent event = mock(PlayerInteractEvent.class);
+        Block block = mock(Block.class);
+        Campfire campfire = mock(Campfire.class);
+        when(event.getAction()).thenReturn(Action.LEFT_CLICK_BLOCK);
+        when(event.getHand()).thenReturn(EquipmentSlot.HAND);
+        when(event.getBlockFace()).thenReturn(BlockFace.UP);
+        when(event.getClickedBlock()).thenReturn(block);
+        when(block.getState()).thenReturn(campfire);
+        when(campfire.getSize()).thenReturn(4);
+
+        listener.onCampfireHit(event);
+
+        verify(event, never()).setCancelled(true);
+        verify(campfire, never()).setItem(anyInt(), nullable(ItemStack.class));
+        verify(campfire, never()).update(false, false);
+    }
+
+    @Test
+    void sideAndOffHandHitsDoNotRemoveItems() {
+        Plugin plugin = mock(Plugin.class);
+        CampfireListener listener = new CampfireListener(plugin);
+        PlayerInteractEvent sideHit = mock(PlayerInteractEvent.class);
+        PlayerInteractEvent offHandHit = mock(PlayerInteractEvent.class);
+        when(sideHit.getAction()).thenReturn(Action.LEFT_CLICK_BLOCK);
+        when(sideHit.getHand()).thenReturn(EquipmentSlot.HAND);
+        when(sideHit.getBlockFace()).thenReturn(BlockFace.NORTH);
+        when(offHandHit.getAction()).thenReturn(Action.LEFT_CLICK_BLOCK);
+        when(offHandHit.getHand()).thenReturn(EquipmentSlot.OFF_HAND);
+        when(offHandHit.getBlockFace()).thenReturn(BlockFace.UP);
+
+        listener.onCampfireHit(sideHit);
+        listener.onCampfireHit(offHandHit);
+
+        verify(sideHit, never()).getClickedBlock();
+        verify(offHandHit, never()).getClickedBlock();
+        verify(sideHit, never()).setCancelled(true);
+        verify(offHandHit, never()).setCancelled(true);
+    }
+
+    @Test
+    void failedRemovalUpdateProtectsTheCampfireWithoutDroppingADuplicate() {
+        Plugin plugin = mock(Plugin.class);
+        CampfireListener listener = new CampfireListener(plugin);
+        PlayerInteractEvent event = mock(PlayerInteractEvent.class);
+        Block block = mock(Block.class);
+        Campfire campfire = mock(Campfire.class);
+        World world = mock(World.class);
+        ItemStack item = mock(ItemStack.class);
+        ItemStack drop = mock(ItemStack.class);
+        when(event.getAction()).thenReturn(Action.LEFT_CLICK_BLOCK);
+        when(event.getHand()).thenReturn(EquipmentSlot.HAND);
+        when(event.getBlockFace()).thenReturn(BlockFace.UP);
+        when(event.getClickedBlock()).thenReturn(block);
+        when(block.getState()).thenReturn(campfire);
+        when(block.getWorld()).thenReturn(world);
+        when(campfire.getSize()).thenReturn(1);
+        when(campfire.getItem(0)).thenReturn(item);
+        when(item.getType()).thenReturn(Material.STONE);
+        when(item.clone()).thenReturn(drop);
+        when(campfire.update(false, false)).thenReturn(false);
+
+        listener.onCampfireHit(event);
+
+        verify(event).setCancelled(true);
+        verify(campfire).setItem(0, null);
+        verify(world, never()).dropItemNaturally(any(Location.class), any(ItemStack.class));
     }
 
     @ParameterizedTest

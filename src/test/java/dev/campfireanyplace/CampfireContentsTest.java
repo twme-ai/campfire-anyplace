@@ -48,6 +48,31 @@ class CampfireContentsTest {
     }
 
     @Test
+    void lastOccupiedSlotUsesTheHighestNonEmptyIndex() {
+        Campfire campfire = mock(Campfire.class);
+        ItemStack air = mock(ItemStack.class);
+        ItemStack occupied = mock(ItemStack.class);
+        when(campfire.getSize()).thenReturn(4);
+        when(campfire.getItem(3)).thenReturn(air);
+        when(air.getType()).thenReturn(Material.AIR);
+        when(campfire.getItem(2)).thenReturn(null);
+        when(campfire.getItem(1)).thenReturn(occupied);
+        when(occupied.getType()).thenReturn(Material.STONE);
+
+        assertEquals(1, CampfireContents.lastOccupiedSlot(campfire));
+
+        verify(campfire, never()).getItem(0);
+    }
+
+    @Test
+    void lastOccupiedSlotReturnsMinusOneForAnEmptyCampfire() {
+        Campfire campfire = mock(Campfire.class);
+        when(campfire.getSize()).thenReturn(4);
+
+        assertEquals(-1, CampfireContents.lastOccupiedSlot(campfire));
+    }
+
+    @Test
     void oneItemCopiesTheStackWithoutMutatingTheSource() {
         ItemStack source = mock(ItemStack.class);
         ItemStack copy = mock(ItemStack.class);
