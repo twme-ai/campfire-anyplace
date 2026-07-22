@@ -1,5 +1,6 @@
 package dev.campfireanyplace;
 
+import io.papermc.paper.event.player.PlayerPickBlockEvent;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.OptionalInt;
@@ -7,12 +8,14 @@ import java.util.UUID;
 import org.bukkit.Chunk;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
+import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.block.BlockState;
 import org.bukkit.block.Campfire;
 import org.bukkit.block.data.BlockData;
+import org.bukkit.block.data.Lightable;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Event;
 import org.bukkit.event.EventHandler;
@@ -26,12 +29,13 @@ import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.CampfireRecipe;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.Recipe;
+import org.bukkit.inventory.meta.BlockDataMeta;
 import org.bukkit.inventory.meta.BlockStateMeta;
 import org.bukkit.plugin.Plugin;
 
 final class CampfireListener implements Listener {
     private final Plugin plugin;
-    private final Map<UUID, CampfireContents.Snapshot> pendingPlacements = new HashMap<>();
+    private final Map<UUID, CampfirePlacement> pendingPlacements = new HashMap<>();
 
     CampfireListener(Plugin plugin) {
         this.plugin = plugin;
@@ -43,15 +47,15 @@ final class CampfireListener implements Listener {
             return;
         }
 
-        CampfireContents.Snapshot contents = contentsFrom(event.getItem());
-        if (contents == null) {
+        CampfirePlacement placement = placementFrom(event.getItem());
+        if (placement == null) {
             return;
         }
 
         UUID playerId = event.getPlayer().getUniqueId();
-        pendingPlacements.put(playerId, contents);
+        pendingPlacements.put(playerId, placement);
         plugin.getServer().getScheduler().runTask(plugin,
-                () -> pendingPlacements.remove(playerId, contents));
+                () -> pendingPlacements.remove(playerId, placement));
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
@@ -133,18 +137,37 @@ final class CampfireListener implements Listener {
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onCampfirePlaced(BlockPlaceEvent event) {
-        CampfireContents.Snapshot contents = pendingPlacements.remove(event.getPlayer().getUniqueId());
-        if (contents == null) {
-            contents = contentsFrom(event.getItemInHand());
+    public void onCampfirePicked(PlayerPickBlockEvent event) {
+        Player player = event.getPlayer();
+        if (!event.isIncludeData()
+                || player.getGameMode() != GameMode.CREATIVE
+                || !(event.getBlock().getState() instanceof Campfire source)
+                || !(source.getBlockData() instanceof Lightable lightable)
+                || lightable.isLit()) {
+            return;
         }
-        if (contents == null) {
+
+        int targetSlot = event.getTargetSlot();
+        PickedBlockData picked = new PickedBlockData(
+                source.getType(),
+                plugin.getServer().createBlockData(source.getType(), "[lit=false]"));
+        plugin.getServer().getScheduler().runTask(plugin,
+                () -> preservePickedBlockData(player, targetSlot, picked));
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onCampfirePlaced(BlockPlaceEvent event) {
+        CampfirePlacement placement = pendingPlacements.remove(event.getPlayer().getUniqueId());
+        if (placement == null) {
+            placement = placementFrom(event.getItemInHand());
+        }
+        if (placement == null) {
             return;
         }
 
         Block placed = event.getBlockPlaced();
-        CampfireContents.Snapshot restoreContents = contents;
-        plugin.getServer().getScheduler().runTask(plugin, () -> restore(placed, restoreContents));
+        CampfirePlacement restorePlacement = placement;
+        plugin.getServer().getScheduler().runTask(plugin, () -> restore(placed, restorePlacement));
     }
 
     @EventHandler
@@ -160,7 +183,7 @@ final class CampfireListener implements Listener {
         }
     }
 
-    private static CampfireContents.Snapshot contentsFrom(ItemStack item) {
+    private static CampfirePlacement placementFrom(ItemStack item) {
         if (item == null || !(item.getItemMeta() instanceof BlockStateMeta meta)) {
             return null;
         }
@@ -168,18 +191,43 @@ final class CampfireListener implements Listener {
         if (!(state instanceof Campfire campfire)) {
             return null;
         }
-        return CampfireContents.capture(campfire);
+        boolean unlit = campfire.getBlockData() instanceof Lightable lightable && !lightable.isLit();
+        return new CampfirePlacement(CampfireContents.capture(campfire), unlit);
     }
 
-    private void restore(Block block, CampfireContents.Snapshot contents) {
+    private void restore(Block block, CampfirePlacement placement) {
         if (!(block.getState() instanceof Campfire campfire)) {
             return;
         }
-        contents.applyTo(campfire);
+        placement.contents().applyTo(campfire);
+        if (placement.unlit()) {
+            BlockData blockData = campfire.getBlockData().clone();
+            if (blockData instanceof Lightable lightable) {
+                lightable.setLit(false);
+                campfire.setBlockData(blockData);
+            }
+        }
         stabilizeNonRecipeItems(campfire);
         if (campfire.update(false, false)) {
             broadcastCampfireUpdate(block);
         }
+    }
+
+    private static void preservePickedBlockData(Player player, int targetSlot, PickedBlockData picked) {
+        if (targetSlot < 0 || targetSlot >= player.getInventory().getSize()) {
+            return;
+        }
+        ItemStack item = player.getInventory().getItem(targetSlot);
+        if (item == null
+                || item.getType() != picked.material()
+                || !(item.getItemMeta() instanceof BlockStateMeta meta)
+                || !(meta instanceof BlockDataMeta blockDataMeta)) {
+            return;
+        }
+        blockDataMeta.setBlockData(picked.blockData());
+        item.setItemMeta(meta);
+        player.getInventory().setItem(targetSlot, item);
+        player.updateInventory();
     }
 
     private void stabilizeCampfires(Chunk chunk) {
@@ -237,5 +285,11 @@ final class CampfireListener implements Listener {
             player.sendBlockChange(location, campfire.getBlockData());
             player.sendBlockUpdate(location, campfire);
         }
+    }
+
+    private record CampfirePlacement(CampfireContents.Snapshot contents, boolean unlit) {
+    }
+
+    private record PickedBlockData(Material material, BlockData blockData) {
     }
 }

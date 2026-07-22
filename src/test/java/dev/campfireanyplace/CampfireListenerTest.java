@@ -8,7 +8,9 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
 
+import io.papermc.paper.event.player.PlayerPickBlockEvent;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
@@ -23,6 +25,7 @@ import org.bukkit.block.BlockFace;
 import org.bukkit.block.BlockState;
 import org.bukkit.block.Campfire;
 import org.bukkit.block.data.BlockData;
+import org.bukkit.block.data.Lightable;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Event;
 import org.bukkit.event.block.Action;
@@ -35,6 +38,7 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.inventory.Recipe;
 import org.bukkit.inventory.RecipeChoice;
+import org.bukkit.inventory.meta.BlockDataMeta;
 import org.bukkit.inventory.meta.BlockStateMeta;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitScheduler;
@@ -121,6 +125,88 @@ class CampfireListenerTest {
         verify(fixture.held, never()).subtract(1);
         verify(fixture.scheduler, never()).runTask(eq(fixture.plugin), any(Runnable.class));
         verify(fixture.player, never()).sendBlockUpdate(any(Location.class), any(Campfire.class));
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Material.class, names = {"CAMPFIRE", "SOUL_CAMPFIRE"})
+    void controlPickPreservesUnlitCampfireData(Material campfireType) {
+        Plugin plugin = mock(Plugin.class);
+        Server server = mock(Server.class);
+        BukkitScheduler scheduler = mock(BukkitScheduler.class);
+        when(plugin.getServer()).thenReturn(server);
+        when(server.getScheduler()).thenReturn(scheduler);
+        when(scheduler.runTask(eq(plugin), any(Runnable.class))).thenReturn(mock(BukkitTask.class));
+        CampfireListener listener = new CampfireListener(plugin);
+
+        PlayerPickBlockEvent event = mock(PlayerPickBlockEvent.class);
+        Player player = mock(Player.class);
+        PlayerInventory inventory = mock(PlayerInventory.class);
+        Block block = mock(Block.class);
+        Campfire source = mock(Campfire.class);
+        Lightable sourceData = mock(Lightable.class);
+        BlockData pickedData = mock(BlockData.class);
+        when(event.isIncludeData()).thenReturn(true);
+        when(event.getPlayer()).thenReturn(player);
+        when(player.getGameMode()).thenReturn(GameMode.CREATIVE);
+        when(event.getTargetSlot()).thenReturn(2);
+        when(event.getBlock()).thenReturn(block);
+        when(block.getState()).thenReturn(source);
+        when(source.getType()).thenReturn(campfireType);
+        when(source.getBlockData()).thenReturn(sourceData);
+        when(sourceData.isLit()).thenReturn(false);
+        when(server.createBlockData(campfireType, "[lit=false]")).thenReturn(pickedData);
+        when(player.getInventory()).thenReturn(inventory);
+        when(inventory.getSize()).thenReturn(41);
+
+        ItemStack pickedItem = mock(ItemStack.class);
+        BlockStateMeta meta = mock(
+                BlockStateMeta.class,
+                withSettings().extraInterfaces(BlockDataMeta.class));
+        when(inventory.getItem(2)).thenReturn(pickedItem);
+        when(pickedItem.getType()).thenReturn(campfireType);
+        when(pickedItem.getItemMeta()).thenReturn(meta);
+
+        listener.onCampfirePicked(event);
+        ArgumentCaptor<Runnable> nextTick = ArgumentCaptor.forClass(Runnable.class);
+        verify(scheduler).runTask(eq(plugin), nextTick.capture());
+        nextTick.getValue().run();
+
+        verify((BlockDataMeta) meta).setBlockData(pickedData);
+        verify(pickedItem).setItemMeta(meta);
+        verify(inventory).setItem(2, pickedItem);
+        verify(player).updateInventory();
+    }
+
+    @Test
+    void ordinaryPickSurvivalPickAndLitCampfiresAreNotRewritten() {
+        Plugin plugin = mock(Plugin.class);
+        Server server = mock(Server.class);
+        BukkitScheduler scheduler = mock(BukkitScheduler.class);
+        when(plugin.getServer()).thenReturn(server);
+        when(server.getScheduler()).thenReturn(scheduler);
+        CampfireListener listener = new CampfireListener(plugin);
+        PlayerPickBlockEvent event = mock(PlayerPickBlockEvent.class);
+        Player player = mock(Player.class);
+        Block block = mock(Block.class);
+        Campfire campfire = mock(Campfire.class);
+        Lightable blockData = mock(Lightable.class);
+        when(event.getBlock()).thenReturn(block);
+        when(event.getPlayer()).thenReturn(player);
+        when(block.getState()).thenReturn(campfire);
+        when(campfire.getBlockData()).thenReturn(blockData);
+
+        when(event.isIncludeData()).thenReturn(false);
+        listener.onCampfirePicked(event);
+
+        when(event.isIncludeData()).thenReturn(true);
+        when(player.getGameMode()).thenReturn(GameMode.SURVIVAL);
+        listener.onCampfirePicked(event);
+
+        when(player.getGameMode()).thenReturn(GameMode.CREATIVE);
+        when(blockData.isLit()).thenReturn(true);
+        listener.onCampfirePicked(event);
+
+        verify(scheduler, never()).runTask(eq(plugin), any(Runnable.class));
     }
 
     @Test
@@ -238,6 +324,9 @@ class CampfireListenerTest {
         when(source.getCookTime(0)).thenReturn(7);
         when(source.getCookTimeTotal(0)).thenReturn(Integer.MAX_VALUE);
         when(source.isCookingDisabled(0)).thenReturn(true);
+        Lightable sourceData = mock(Lightable.class);
+        when(source.getBlockData()).thenReturn(sourceData);
+        when(sourceData.isLit()).thenReturn(false);
 
         PlayerInteractEvent interact = mock(PlayerInteractEvent.class);
         when(interact.getAction()).thenReturn(Action.RIGHT_CLICK_BLOCK);
@@ -251,11 +340,13 @@ class CampfireListenerTest {
         when(placedBlock.getState()).thenReturn(target);
         when(target.getSize()).thenReturn(1);
         when(target.update(false, false)).thenReturn(true);
-        BlockData targetData = mock(BlockData.class);
+        Lightable targetData = mock(Lightable.class);
+        Lightable restoredData = mock(Lightable.class);
         Location location = mock(Location.class);
         Chunk chunk = mock(Chunk.class);
         Player observer = mock(Player.class);
         when(target.getBlockData()).thenReturn(targetData);
+        when(targetData.clone()).thenReturn(restoredData);
         when(placedBlock.getLocation()).thenReturn(location);
         when(placedBlock.getChunk()).thenReturn(chunk);
         when(chunk.getPlayersSeeingChunk()).thenReturn(List.of(observer));
@@ -273,6 +364,8 @@ class CampfireListenerTest {
         verify(target).setCookTime(0, 7);
         verify(target).setCookTimeTotal(0, Integer.MAX_VALUE);
         verify(target).stopCooking(0);
+        verify(restoredData).setLit(false);
+        verify(target).setBlockData(restoredData);
         verify(target).update(false, false);
         verify(observer).sendBlockUpdate(location, target);
     }
