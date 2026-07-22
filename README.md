@@ -26,7 +26,7 @@ Requires Java 21 and Maven:
 mvn clean package
 ```
 
-Install `target/campfire-anyplace-1.1.1.jar` in the server's `plugins` directory.
+Install `target/campfire-anyplace-1.1.2.jar` in the server's `plugins` directory.
 
 ## License
 

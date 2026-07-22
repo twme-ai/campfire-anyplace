@@ -1,5 +1,5 @@
 name: CampfireAnyplace
-version: '1.1.1'
+version: '1.1.2'
 main: dev.campfireanyplace.CampfireAnyplacePlugin
 api-version: '1.13'
 description: Put any item on regular and soul campfires while preserving their contents.
